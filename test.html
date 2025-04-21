@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flappy Crow</title>
+    <style>
+        body {
+            margin: 0; padding: 0; display: flex; justify-content: center; align-items: center;
+            min-height: 100vh; background-color: #111; overflow: hidden;
+        }
+        canvas {
+            border: 1px solid black; display: block; background-color: #445566;
+            image-rendering: -moz-crisp-edges; image-rendering: -webkit-crisp-edges;
+            image-rendering: pixelated; image-rendering: crisp-edges;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        const GAME_WIDTH = 320;
+        const GAME_HEIGHT = 480;
+        const GAME_ASPECT_RATIO = GAME_WIDTH / GAME_HEIGHT;
+
+        canvas.width = GAME_WIDTH;
+        canvas.height = GAME_HEIGHT;
+
+        let score = 0;
+        let gameState = 'ready'; // 'ready', 'playing', 'gameover'
+        let frames = 0; // Global frame counter
+        const DEGREE = Math.PI / 180;
+        const DEBUG_SHOW_HITBOXES = false; // Keep disabled
+
+        let assetsLoaded = 0;
+        const totalAssets = 4;
+        let allAssetsLoaded = false;
+
+        function assetLoaded() {
+            assetsLoaded++;
+            if (assetsLoaded === totalAssets) {
+                allAssetsLoaded = true;
+                console.log("All assets loaded!");
+                requestAnimationFrame(gameLoop);
+            }
+        }
+
+        // --- Asset Loading ---
+        const bgImage = new Image(); bgImage.onload = assetLoaded; bgImage.src = 'background.png';
+        const groundImage = new Image(); groundImage.onload = assetLoaded; groundImage.src = 'ground.png';
+        const birdImage = new Image(); birdImage.onload = assetLoaded; birdImage.src = 'bird.png'; // Using the single crow image
+        const pipeImage = new Image(); pipeImage.onload = assetLoaded; pipeImage.src = 'pipe.png';
+
+        // --- Game Objects ---
+
+        const ground = {
+            sprite: groundImage, x: 0, y: GAME_HEIGHT - 112, width: 336, height: 112, dx: 2, // Verify dims
+            draw: function() { ctx.drawImage(this.sprite, this.x, this.y, this.width, this.height); ctx.drawImage(this.sprite, this.x + this.width, this.y, this.width, this.height); },
+            update: function() { if (gameState === 'playing') { this.x = (this.x - this.dx) % (this.width / 2); } }
+        };
+
+        const bird = {
+            sprite: birdImage,
+            // Animation array still here as placeholder if sprite sheet is added later
+            animation: [ { sX: 0, sY: 0 }, { sX: 68, sY: 0 }, { sX: 136, sY: 0 }, { sX: 68, sY: 0 } ],
+            x: 50, y: 150,
+            // !! >>>>>>>> IMPORTANT: Ensure these match ACTUAL bird.png dimensions! <<<<<<<<<< !!
+            baseWidth: 68,  // <<<< Width of your SINGLE crow image !!!!
+            baseHeight: 48, // <<<< Height of your SINGLE crow image !!!!
+            // !! >>>>>>>>>>>>>>>>>>>>>>>>>>>>>><<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< !!
+            scaleFactor: 0.5, width: 0, height: 0, // Scaled dimensions for drawing
+            frame: 0, // Current animation frame index (won't visually change now)
+            period: 5, // Animation speed controller (won't visually change now)
+            gravity: 0.15, jump: 3.6, speed: 0, rotation: 0,
+
+            init: function() {
+                this.width = this.baseWidth * this.scaleFactor;
+                this.height = this.baseHeight * this.scaleFactor;
+            },
+
+            draw: function() {
+                // --- Reverted Draw Logic ---
+                // Draws the *entire* bird.sprite image, scaled. Ignores animation array for now.
+                ctx.save();
+                ctx.translate(this.x + this.width / 2, this.y + this.height / 2);
+                ctx.rotate(this.rotation * DEGREE);
+                ctx.scale(-1, 1); // Flip horizontal if needed
+
+                // Draw the whole bird image, centered and scaled
+                ctx.drawImage(
+                    this.sprite,         // Source image (the whole bird.png)
+                    -this.width / 2,     // Destination X (centered)
+                    -this.height / 2,    // Destination Y (centered)
+                    this.width,          // Destination Width (scaled)
+                    this.height          // Destination Height (scaled)
+                );
+
+                ctx.restore();
+                // --- End Reverted Draw Logic ---
+            },
+
+            update: function() {
+                // --- Animation Frame Calculation (kept for future use) ---
+                // This part calculates which frame *would* be shown if using a sprite sheet.
+                // It doesn't hurt to leave it, it just won't affect the reverted draw() function.
+                this.period = gameState === 'ready' ? 10 : 5;
+                this.frame += (frames % this.period === 0) ? 1 : 0;
+                this.frame = this.frame % this.animation.length;
+                // --- End Animation Frame Calculation ---
+
+                // Physics logic remains the same
+                if (gameState === 'ready') { this.y = 150; this.rotation = 0; this.speed = 0; }
+                else {
+                    this.speed += this.gravity; this.y += this.speed;
+                    if (this.y + this.height / 2 >= ground.y) { this.y = ground.y - this.height / 2; if (gameState === 'playing') { gameOver(); } }
+                    if (this.y - this.height / 2 <= 0) { this.y = this.height / 2; this.speed = 0; }
+                    if (this.speed >= this.jump) { this.rotation = Math.min(70, this.rotation + 4); } else if (this.speed < 0) { this.rotation = -25; } else { this.rotation = Math.min(70, this.rotation + 2); }
+                    if (this.y + this.height / 2 >= ground.y) { this.rotation = 70; }
+                }
+            },
+            flap: function() { if (this.y > this.height / 2 && gameState === 'playing') { this.speed = -this.jump; } },
+            reset: function() { this.speed = 0; this.y = 150; this.rotation = 0; this.frame = 0; } // Reset frame too
+        };
+        bird.init();
+
+        const pipes = { // Pipes use the easier settings from last time
+            sprite: pipeImage, position: [],
+            width: 53, height: 400, // CHECK DIMS!
+            gap: 120, dx: 2, // Wider gap
+            minTopPipeBottomY: 50,
+            maxTopPipeBottomY: GAME_HEIGHT - ground.height - 50 - 120, // Uses 120 gap
+
+            draw: function() { /* ... pipe drawing ... */
+                for (let i = 0; i < this.position.length; i++) {
+                    let p = this.position[i];
+                    let topPipeBottomEdgeY = p.y;
+                    let bottomPipeTopEdgeY = p.y + this.gap;
+                    let topPipeDrawSourceY = topPipeBottomEdgeY - this.height;
+                    ctx.save();
+                    ctx.translate(p.x + this.width / 2, topPipeDrawSourceY + this.height / 2);
+                    ctx.scale(1, -1);
+                    ctx.drawImage(this.sprite, -this.width / 2, -this.height / 2, this.width, this.height);
+                    ctx.restore();
+                    ctx.drawImage(this.sprite, p.x, bottomPipeTopEdgeY, this.width, this.height);
+                }
+            },
+            update: function() { /* ... pipe update ... */
+                if (gameState !== 'playing') return;
+                if (frames % 120 === 0) { // Generate pipes less frequently (further apart)
+                    let randomTopPipeBottomY = this.minTopPipeBottomY + Math.random() * (this.maxTopPipeBottomY - this.minTopPipeBottomY);
+                    this.position.push({ x: GAME_WIDTH, y: randomTopPipeBottomY, passed: false });
+                }
+                for (let i = this.position.length - 1; i >= 0; i--) {
+                    let p = this.position[i]; p.x -= this.dx;
+                    let pipeLeft = p.x; let pipeRight = p.x + this.width;
+                    let topPipeBottomEdgeY = p.y; let bottomPipeTopEdgeY = p.y + this.gap; // Uses 120 gap
+                    const birdLeft = bird.x; const birdRight = bird.x + bird.width;
+                    const birdTop = bird.y; const birdBottom = bird.y + bird.height;
+                    if (birdRight > pipeLeft && birdLeft < pipeRight) {
+                        if (birdTop < topPipeBottomEdgeY) { gameOver(); return; }
+                        if (birdBottom > bottomPipeTopEdgeY) { gameOver(); return; }
+                    }
+                    if (!p.passed && pipeRight < birdLeft) { score++; p.passed = true; }
+                    if (pipeRight <= 0) { this.position.splice(i, 1); }
+                }
+            },
+            reset: function() { this.position = []; }
+        };
+
+        // Messages & Score Display (Arial Font)
+        const message = { /* ... same as before ... */
+             drawReady: function() { if (gameState === 'ready') { ctx.fillStyle = "#FFF"; ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.font = "bold 30px Arial"; ctx.textAlign = "center"; ctx.fillText("Get Ready", GAME_WIDTH / 2, GAME_HEIGHT / 2 - 50); ctx.strokeText("Get Ready", GAME_WIDTH / 2, GAME_HEIGHT / 2 - 50); ctx.font = "bold 20px Arial"; ctx.fillText("Tap or Space to Start", GAME_WIDTH / 2, GAME_HEIGHT / 2); ctx.strokeText("Tap or Space to Start", GAME_WIDTH / 2, GAME_HEIGHT / 2); } },
+             drawGameOver: function() { if (gameState === 'gameover') { ctx.fillStyle = "#FFF"; ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.font = "bold 40px Arial"; ctx.textAlign = "center"; ctx.fillText("Game Over", GAME_WIDTH / 2, GAME_HEIGHT / 2 - 50); ctx.strokeText("Game Over", GAME_WIDTH / 2, GAME_HEIGHT / 2 - 50); ctx.font = "bold 25px Arial"; ctx.fillText(`Score: ${score}`, GAME_WIDTH / 2, GAME_HEIGHT / 2); ctx.strokeText(`Score: ${score}`, GAME_WIDTH / 2, GAME_HEIGHT / 2); ctx.font = "bold 20px Arial"; ctx.fillText("Tap or Space to Retry", GAME_WIDTH / 2, GAME_HEIGHT / 2 + 40); ctx.strokeText("Tap or Space to Retry", GAME_WIDTH / 2, GAME_HEIGHT / 2 + 40); } }
+        };
+        function drawScore() { if (gameState === 'playing') { ctx.fillStyle = "#FFF"; ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.font = "bold 35px Arial"; ctx.textAlign = "center"; ctx.fillText(score, GAME_WIDTH / 2, 50); ctx.strokeText(score, GAME_WIDTH / 2, 50); } }
+
+        // --- Game State Management & Input ---
+        function resetGame() { bird.reset(); pipes.reset(); score = 0; frames = 0; gameState = 'ready'; }
+        function startGame() { if (gameState === 'ready') { gameState = 'playing'; } }
+        function gameOver() { if (gameState === 'playing') { gameState = 'gameover'; /* HIT_SOUND.play(); */ } }
+        function handleInput(event) { /* ... same as before ... */
+            if (event.type === 'touchstart') { event.preventDefault(); }
+            if (gameState === 'ready') { startGame(); bird.flap(); }
+            else if (gameState === 'playing') { bird.flap(); }
+            else if (gameState === 'gameover') { resetGame(); }
+        }
+        canvas.addEventListener('click', handleInput);
+        canvas.addEventListener('touchstart', handleInput, { passive: false });
+        window.addEventListener('keydown', function(e) { if (e.code === 'Space') { handleInput(e); e.preventDefault(); } });
+
+        // --- Canvas Resizing ---
+        function resizeCanvas() { /* ... same as before ... */
+            const windowWidth = window.innerWidth; const windowHeight = window.innerHeight;
+            const windowAspectRatio = windowWidth / windowHeight;
+            let newCanvasWidth; let newCanvasHeight;
+            if (windowAspectRatio > GAME_ASPECT_RATIO) { newCanvasHeight = windowHeight; newCanvasWidth = newCanvasHeight * GAME_ASPECT_RATIO; }
+            else { newCanvasWidth = windowWidth; newCanvasHeight = newCanvasWidth / GAME_ASPECT_RATIO; }
+            canvas.style.width = `${newCanvasWidth}px`; canvas.style.height = `${newCanvasHeight}px`;
+        }
+        resizeCanvas(); window.addEventListener('resize', resizeCanvas);
+
+        // --- Loading Screen ---
+        function drawLoadingScreen() { /* ... same as before ... */
+            ctx.fillStyle = '#333'; ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+            ctx.fillStyle = '#FFF'; ctx.font = "bold 20px Arial"; ctx.textAlign = "center";
+            ctx.fillText(`Loading Assets... ${assetsLoaded}/${totalAssets}`, GAME_WIDTH / 2, GAME_HEIGHT / 2);
+        }
+
+        // --- Main Game Loop ---
+        function gameLoop() {
+            if (!allAssetsLoaded) { drawLoadingScreen(); requestAnimationFrame(gameLoop); return; }
+
+            // Update
+            if (gameState === 'playing' || gameState === 'ready') { bird.update(); ground.update(); }
+            if (gameState === 'playing') { pipes.update(); }
+
+            // Draw
+            ctx.drawImage(bgImage, 0, 0, GAME_WIDTH, GAME_HEIGHT); // Background
+            pipes.draw();   // Pipes
+            ground.draw();  // Ground
+            bird.draw();    // Bird (using reverted drawing logic)
+
+            // UI
+            drawScore();
+            message.drawReady();
+            message.drawGameOver();
+
+            frames++;
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Start ---
+        drawLoadingScreen();
+
+    </script>
+</body>
+</html>
